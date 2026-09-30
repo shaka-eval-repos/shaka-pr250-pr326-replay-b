@@ -15,6 +15,7 @@ class ConfigurationBoundaryTest < Minitest::Test
     checkpoint.rb doctor.rb doctor/installation_identity.rb doctor/cursor_stop_hook.rb
     enforcement_config.rb evidence/command.rb evidence/verification.rb installer.rb install/source.rb install/tree.rb
     install/link_lock.rb install/package.rb install/package_verification.rb install/version.rb local_review/ledger.rb
+    local_review/ledger_transaction.rb local_review/record_command.rb
     local_review.rb local_review/cli.rb local_review/comment.rb local_review/path_guard.rb local_review/shebang.rb
     local_review/report_check.rb local_review/runner.rb merge_tree_proof.rb opening_parse.rb opening_check.rb
     opening_verdict_cache.rb recommendation.rb repos/home.rb review_prompt.rb usage/claude_usage.rb usage/codex_usage.rb
@@ -103,9 +104,7 @@ class ConfigurationBoundaryTest < Minitest::Test
     "#{relative}: #{findings.join(', ')}" unless findings.empty?
   end
 
-  def source_findings(relative, source)
-    path_findings(relative, source) + access_findings(relative, source)
-  end
+  def source_findings(relative, source) = path_findings(relative, source) + access_findings(relative, source)
 
   def path_findings(relative, source)
     findings = []

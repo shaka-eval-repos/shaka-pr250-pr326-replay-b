@@ -87,9 +87,9 @@ module Shaka
     end
 
     def unfixed_defects
-      findings = @rounds.flat_map(&:findings)
-      defects = findings.select { |finding| finding.kind == 'defect' }.map(&:id)
-      latest = findings.to_h { |finding| [finding.id, finding] }
+      findings = @rounds.flat_map { |round| round.findings.map { |finding| [[round.reviewer, finding.id], finding] } }
+      defects = findings.select { |_, finding| finding.kind == 'defect' }.map(&:first)
+      latest = findings.to_h
       defects.uniq.count { |id| !latest.fetch(id).fixed? }
     end
 

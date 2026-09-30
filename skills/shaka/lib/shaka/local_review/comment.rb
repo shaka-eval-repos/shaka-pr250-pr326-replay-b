@@ -31,6 +31,8 @@ module Shaka
       raise Error, 'Expected a GitHub repository in OWNER/REPO form.' unless
         repository.nil? || repository.match?(%r{\A[\w-]+/[\w.-]+\z})
 
+      raise Error, 'The review batch still has pending reviewers.' unless Array(content['pending']).empty?
+
       @links = LocalReviewLinks.new(repository, published)
       @rounds = build_rounds(PublicationText.list(content['rounds'], 'rounds'))
       @fallback = content['fallback']
@@ -66,12 +68,26 @@ module Shaka
     end
 
     def check_order!(rounds)
-      raise Error, 'Two rounds review the same commit; each round reviews a new head.' unless
-        rounds.map(&:head).uniq.size == rounds.size
-      raise Error, "Round #{rounds.size} records fixes no later round reviewed; review the fix head first." if
-        rounds.last.findings.any?(&:fixed?)
+      check_identities!(rounds)
+      check_batches!(rounds)
+      rounds.each_with_index do |round, index|
+        next unless round.head == rounds.last.head && round.findings.any?(&:fixed?)
+
+        raise Error, "Round #{index + 1} records fixes no later round reviewed; review the fix head first."
+      end
 
       rounds.each(&:check_fixes_follow!)
+    end
+
+    def check_identities!(rounds)
+      identities = rounds.map { |round| [round.head, round.reviewer] }
+      raise Error, 'Two rounds review the same commit with the same reviewer.' unless
+        identities.uniq.size == rounds.size
+    end
+
+    def check_batches!(rounds)
+      heads = rounds.chunk(&:head).map(&:first)
+      raise Error, 'An earlier head reappears after another batch.' unless heads.uniq.size == heads.size
     end
 
     # A fence opened in one report and closed in the next hides the boundary between them, including
@@ -89,7 +105,7 @@ module Shaka
       fixed = {}
       @rounds.map do |round|
         text = round.details(@links, fixed)
-        round.findings.select(&:fixed?).each { |finding| fixed[finding.id] = finding.commit }
+        round.findings.select(&:fixed?).each { |finding| fixed[[round.reviewer, finding.id]] = finding.commit }
         text
       end
     end
@@ -134,7 +150,7 @@ module Shaka
 
     # One reviewed commit, its reviewer settings, and the report whose attestation it carries.
     class Round
-      attr_reader :head, :findings
+      attr_reader :head, :findings, :reviewer
 
       def initialize(spec, number)
         raise Error, "Local review round #{number} must be an object." unless spec.is_a?(Hash)
@@ -210,7 +226,7 @@ module Shaka
           result = finding.fixed? ? "fixed in #{links.commit(finding.commit)}" : finding.label
           line = "- `#{finding.id}` #{finding.kind}: #{finding.summary} — #{result}"
           line += " — #{finding.note}" if finding.note
-          returned = fixed_before[finding.id]
+          returned = fixed_before[[@reviewer, finding.id]]
           returned ? "#{line} · **returned after its fix in #{links.commit(returned)}**" : line
         end
         "**Dispositions**\n\n#{lines.join("\n")}\n\n"

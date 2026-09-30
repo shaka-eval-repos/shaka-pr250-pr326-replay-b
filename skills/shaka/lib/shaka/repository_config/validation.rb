@@ -9,6 +9,10 @@ module Shaka
     module Validation
       private
 
+      def positive_integer!(value, label)
+        raise Error, "#{label} must be a positive integer" unless value.is_a?(Integer) && value.positive?
+      end
+
       def string!(value, label)
         raise Error, "#{label} must be a non-empty string" unless value.is_a?(String) && !value.strip.empty?
 

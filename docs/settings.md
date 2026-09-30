@@ -233,6 +233,26 @@ Configured CI review jobs have separate waiting rules under
 [`review.ci_review_wait`](#reviewci_review_wait).
 See [reviewer selection](../skills/shaka/references/review.md#choose-a-local-reviewer).
 
+## `review.local_review_count`
+
+**Optional; default 1.** Choose how many distinct local reviewers assess one
+committed version. With Claude, Codex, and Grok configured in that order, an
+OpenAI implementation and a count of 2 select Claude first, then Codex.
+The first choice still prefers a provider that did not implement the change;
+additional choices follow the configured order and skip unavailable identities.
+
+Set a positive integer, for example `local_review_count: 2`, inside `review`.
+Selection returns fewer reviewers when fewer distinct identities are available.
+When every listed CLI is unavailable, the existing fresh-context implementation
+reviewer fallback remains one choice. Selection launches no processes.
+
+More reviewers can find different defects, but each receives the full diff and
+adds its own token and provider cost. Concurrent execution can reduce waiting;
+it does not reduce total review work. Start with one and increase the count when
+another perspective is worth that cost. Follow the
+[batch procedure](../skills/shaka/references/local-review.md#review-one-head-with-several-reviewers)
+to retain every report and disposition.
+
 ### Add a second reviewer
 
 A review from the provider that wrote the change shares its blind spots. When the

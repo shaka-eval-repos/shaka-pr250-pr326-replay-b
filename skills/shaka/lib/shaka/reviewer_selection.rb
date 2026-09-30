@@ -34,13 +34,16 @@ module Shaka
       { 'provider' => provider.strip, 'model_family' => family.strip }
     end
 
-    def initialize(reviewers:, implementers:, unavailable: [])
+    def initialize(reviewers:, implementers:, unavailable: [], count: 1)
       @reviewers = reviewers || []
       @implementers = implementers
       @unavailable = unavailable
+      @count = count
     end
 
     def call
+      raise Error, 'Review count must be a positive integer.' unless @count.is_a?(Integer) && @count.positive?
+
       raise Error, 'At least one implementer identity is required.' if @implementers.empty?
 
       reasons = @reviewers.map { |entry| [entry, reason(entry)] }
@@ -71,10 +74,17 @@ module Shaka
       {
         'outcome' => outcome,
         'reviewer' => reviewer_for(outcome, selected),
+        'reviewers' => ordered_reviewers(outcome, selected),
         'implementation_providers' => providers,
         'considered' => reasons.map { |entry, why| { 'reviewer' => identity(entry), 'reason' => why } },
         'note' => note(outcome, selected)
       }
+    end
+
+    def ordered_reviewers(outcome, selected)
+      first = reviewer_for(outcome, selected)
+      additional = @reviewers.reject { |entry| unavailable?(entry) }.map { |entry| identity(entry) }
+      ([first] + additional).uniq(&:downcase).first(@count)
     end
 
     def outcome_for(selected, reasons)

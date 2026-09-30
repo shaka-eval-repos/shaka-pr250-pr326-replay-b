@@ -7,12 +7,15 @@ require_relative 'github'
 require_relative 'local_review/comment'
 require_relative 'local_review/ledger'
 require_relative 'local_review/runner'
+require_relative 'local_review/record_command'
 require_relative 'local_review/report_check'
 require_relative 'evidence/review'
 
 module Shaka
   # Entry point for process-verified reviews and explicitly weaker host reports.
   class LocalReview
+    include LocalReviewRecordCommand
+
     def self.run(arguments, github: nil)
       new(arguments, github:).run
     rescue OptionParser::ParseError, SystemCallError, JSON::ParserError, Shaka::Error => e
@@ -80,25 +83,6 @@ module Shaka
       comment.check_rendering!(github.markdown(body))
       puts JSON.pretty_generate(github.reply(body:, key: LocalReviewComment::KEY))
       0
-    end
-
-    def record(parser)
-      raise OptionParser::InvalidArgument, parser.to_s unless
-        @arguments.empty? && @options[:ledger] && @options[:content_file]
-
-      ledger = LocalReviewLedger.new(@options[:ledger])
-      ledger.record!(JSON.parse(File.read(@options[:content_file], encoding: 'UTF-8')))
-      puts JSON.pretty_generate('ledger' => ledger.path, 'round' => ledger.rounds.size)
-      0
-    end
-
-    def record_parser
-      OptionParser.new do |flags|
-        flags.banner = 'Usage: shaka review record --ledger PATH --content-file PATH'
-        flags.on('--ledger PATH') { |value| @options[:ledger] = value }
-        flags.on('--content-file PATH') { |value| @options[:content_file] = value }
-        flags.on('-h', '--help') { @options[:help] = true }
-      end
     end
 
     def review_comment(github)

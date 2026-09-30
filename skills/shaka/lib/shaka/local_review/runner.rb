@@ -61,6 +61,20 @@ module Shaka
   module LocalReviewPathGuard
     private
 
+    # An unset MODEL variable must fail here, not launch the reviewer with an empty model.
+    def validate_model_name!
+      raise Shaka::Error, '--model must name a model' if @options[:model]&.match?(/\A\s*\z/)
+    end
+
+    def prepare_review
+      @attempted = false
+      validate_path!
+      git_executable
+      validate!
+      validate_tempdir!
+      open_ledger
+    end
+
     def validate_path!
       ENV['PATH'] = LocalReviewPathGuard.safe_path(ENV.fetch('PATH', ''), candidate_root: root, drop_candidate: true)
     end
@@ -115,17 +129,17 @@ module Shaka
       return unless @options[:ledger]
 
       @ledger = LocalReviewLedger.new(@options[:ledger], root:)
-      @ledger.check_next!(base: @options[:base], head:)
-      check_history! if @ledger.last_head
+      @ledger.start!(base: @options[:base], head:, reviewer:)
+      check_history! if @ledger.previous_head(head)
     end
 
     # The next round must hold the last reviewed head and each fix the last round records, and each
     # fix must come after the head it was found in, or the comment would call a finding fixed in a
     # commit that is missing or predates it. Earlier rounds' fixes are already inside the last head.
     def check_history!
-      last = @ledger.last_head
+      last = @ledger.previous_head(head)
       contains!(last, head)
-      @ledger.last_round_fixes.each do |fix|
+      @ledger.fixes_before(head).each do |fix|
         raise Shaka::Error, "Fix #{fix} is the head round #{@ledger.rounds.size} reviewed; commit the fix." if
           fix == last
 
@@ -150,22 +164,24 @@ module Shaka
       round = result.slice('head', 'reviewer', 'report', 'prompt_source', 'criteria_ref', 'usage')
       # The routed model comes from native usage through `review record`, never from the request.
       round = round.merge('effort' => effort, 'requested_model' => @options[:model]).compact
-      @ledger.append!(base: @options[:base], round:)
-      result.merge('ledger' => @ledger.path, 'round' => @ledger.rounds.size)
+      validate_checkout!
+      number = @ledger.append!(base: @options[:base], round:)
+      result.merge('ledger' => @ledger.path, 'round' => number)
     end
 
     # Earlier rounds reach the reviewer as data: each finding's class and disposition, never the
     # author's note, so the reviewer checks the fixes without anchoring on the author's reasons.
     def prior_rounds(marker)
-      return '' unless @ledger&.rounds&.any?
+      return '' unless @ledger&.previous_head(head)
 
-      findings = @ledger.prior_findings.map(&:prompt_line)
-      commits = capture(git_executable, '-C', root, 'log', '--format=%h %s', "#{@ledger.last_head}..#{head}", '--')
+      findings = @ledger.prior_finding_lines(head)
+      commits = capture(git_executable, '-C', root, 'log', '--format=%h %s', "#{@ledger.previous_head(head)}..#{head}",
+                        '--')
       'PRIOR ROUNDS: Earlier local rounds reviewed this change. Confirm each fix below resolves its finding, ' \
         'and report it again with the same id if not. Do not raise documented findings again unless the ' \
         "change made them worse. Then review the full diff fresh.\n\n--- BEGIN PRIOR ROUND DATA #{marker} ---\n" \
         "Findings:\n#{findings.empty? ? 'none' : findings.join("\n")}\n\n" \
-        "Commits since #{@ledger.last_head}:\n#{commits}--- END PRIOR ROUND DATA #{marker} ---\n\n"
+        "Commits since #{@ledger.previous_head(head)}:\n#{commits}--- END PRIOR ROUND DATA #{marker} ---\n\n"
     end
   end
 
@@ -180,15 +196,12 @@ module Shaka
     def initialize(options) = @options = options
 
     def run
-      @attempted = false
-      validate_path!
-      git_executable
-      validate!
-      validate_tempdir!
-      open_ledger
+      prepare_review
       with_requested_model(record_round(run_report(review_prompt)))
     rescue Shaka::Error, SystemCallError => e
       with_requested_model(setup_failure(e))
+    ensure
+      @ledger&.cancel!
     end
 
     private
@@ -236,11 +249,6 @@ module Shaka
       validate_reviewer!
       validate_model_name!
       validate_checkout!
-    end
-
-    # An unset MODEL variable must fail here, not launch the reviewer with an empty model.
-    def validate_model_name!
-      raise Shaka::Error, '--model must name a model' if @options[:model]&.match?(/\A\s*\z/)
     end
 
     def validate_reviewer!
