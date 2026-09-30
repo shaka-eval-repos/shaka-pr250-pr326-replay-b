@@ -229,19 +229,67 @@ shaka review record --ledger "$LEDGER" --content-file FINDINGS.json
 fixed nit, a count that differs from the report's `FINDINGS n`, and a repeated id. Give a
 finding the same `id` when a later round raises it again: the comment then flags a finding that
 returned after its fix, a sign the fixes are not converging. Give a new finding an id no
-earlier round used: the outcome follows each id's latest disposition, so reusing one for a
+earlier round by that reviewer used: the outcome follows each reviewer's id and latest disposition, so reusing one for a
 different problem can hide an unfixed defect. `model`, `tokens`, `cost`, and
 `estimate` are optional, as described below, and a top-level `fallback` sets the fallback notice.
 
-`review run` refuses the next round until the last round's findings are recorded. It also
-refuses a head the ledger already reviewed, a head that lacks the last reviewed head or any
-recorded fix commit, a fix recorded as the head it was found in, and a different `--base`;
-after a rebase, start a new ledger. Publishing refuses a last round that records a fix, because
-no later round has reviewed it. The next round's prompt
-lists, as review data, every earlier finding's id, class, summary, and latest disposition
-(`fixed in SHA`, `documented nit`, `documented risk`), plus the commits since the last
-reviewed head. It asks the reviewer to confirm each fix and to review the full diff fresh.
-It leaves out each `note`, so the reviewer does not anchor on the author's reasons.
+`review run` allows different reviewers to append rounds for the current head.
+It refuses the same reviewer/head pair twice, including simultaneous launches.
+Before a new head starts, every pending process must finish and every completed
+round must have dispositions matching its report. The new head must contain the
+previous reviewed head and all fix commits recorded by that batch. The existing
+base and fix ancestry checks still apply; after a rebase, start a new ledger.
+Publishing refuses pending processes or fixes in the final head's batch, because
+no later head has reviewed those fixes.
+
+Each reviewer sees only earlier-head findings and commits since the previous
+head. Current-head peer findings stay out of the prompt even if a peer finishes
+first. Notes stay out of all review prompts. Findings with the same id from
+different reviewers remain separate in the ledger and publication summary.
+
+### Review one head with several reviewers
+
+Ask your agent: “Review this committed version with two configured reviewers.
+Run them concurrently, retain both reports, and handle their findings together.”
+Set up each CLI as described in
+[settings](https://github.com/shakacode/shaka/blob/main/docs/settings.md#add-a-second-reviewer).
+Choose the batch with trusted policy:
+
+```bash
+shaka reviewer --root . --ref "$TRUSTED" --implementer openai/codex --count 2
+```
+
+`--count N` accepts a positive integer and overrides `review.local_review_count`
+for this selection. The ordered `reviewers` array gives the choices; `reviewer`,
+`outcome`, and `note` still describe the first choice. Check the returned length
+when fewer identities are available; never duplicate one to fill a slot.
+
+For each returned identity, run the documented provider command with the same
+`BASE`, `HEAD`, `TRUSTED`, and `LEDGER`. Launch all peers before advancing the
+checkout. Wait for every process and inspect every result; a background launch
+alone proves nothing. Use the returned round numbers to record dispositions:
+
+```bash
+shaka review record --ledger "$LEDGER" --round 1 --content-file FIRST_FINDINGS.json
+shaka review record --ledger "$LEDGER" --round 2 --content-file SECOND_FINDINGS.json
+```
+
+Without `--round`, recording still updates the last round for existing
+single-reviewer workflows. Round numbers follow completion order. Record all
+findings, then commit one repair batch and review its new head. Publish the
+whole ledger so earlier evidence remains visible.
+
+Short file locks protect reservations, append operations, and disposition
+updates; reviewer processes run outside the lock. Completion reloads the ledger
+and preserves valid peer writes. A changed base, removed reservation, changed
+earlier-head evidence, or moved checkout head rejects the result as stale.
+Ordinary failures release their reservation and preserve completed peers.
+If the helper is killed before cleanup, its pending entry blocks advancement
+and publication. Stop surviving processes, preserve the ledger and reports,
+and remove only the abandoned pending entry while no writer runs; do not
+silently discard it or start a new ledger to hide completed findings.
+Use a local filesystem with working advisory locks and atomic rename. Each peer
+has its own timeout and full-diff cost; this command adds no retry scheduler.
 
 A round whose findings are all documented ends the loop. Push, open or adopt the pull request,
 then publish right away:
@@ -256,7 +304,7 @@ The ledger is the content file. Without one, the content JSON lists `rounds`. Co
 round's `head`, `reviewer`, `report`, `prompt_source`, and `criteria_ref` from its
 `shaka review run` result, and add its `findings` in the shape above. Publishing refuses a
 round whose findings do not match its report's `FINDINGS n`, so every finding has a disposition.
-It also refuses two rounds of one commit and a fix recorded in the commit its round reviewed. A
+It also refuses duplicate reviewer/head pairs, noncontiguous head batches, and a fix recorded in the commit its round reviewed. A
 content file without a ledger gets only these checks: publishing does not read Git history, so
 use `--ledger` when fixes must be proven to follow and reach the reviewed head.
 Add `model`, `tokens`, and `cost` from native usage; a missing value renders `UNKNOWN`. Leave

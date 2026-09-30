@@ -4,12 +4,17 @@ require 'json'
 require_relative '../error'
 require_relative 'evidence'
 require_relative 'finding'
+require_relative 'ledger_transaction'
+require_relative 'ledger_guards'
 
 module Shaka
   # Private record of a local review loop: each round's commit, reviewer settings, report, and
   # what became of its findings. It stays outside the checkout until `review publish` renders it,
   # and it has the same shape as that command's content file.
   class LocalReviewLedger
+    include LocalReviewLedgerTransaction
+    include LocalReviewLedgerGuards
+
     attr_reader :path
 
     # Only `review run` can start a ledger, so only it needs the checkout to keep the ledger out of.
@@ -22,45 +27,34 @@ module Shaka
 
     def rounds = data.fetch('rounds')
 
-    def last_round_fixes
-      LocalReviewFinding.list(rounds.last['findings'], "round #{rounds.size} finding").select(&:fixed?).map(&:commit)
+    def previous_rounds(head) = rounds.reject { |round| round['head'] == head }
+
+    def previous_head(head) = previous_rounds(head).last&.fetch('head')
+
+    def fixes_before(head)
+      previous = previous_rounds(head)
+      batch = previous.select { |round| round['head'] == previous.last&.fetch('head') }
+      batch.flat_map { |round| LocalReviewFinding.list(round['findings'], 'finding').select(&:fixed?).map(&:commit) }
     end
 
     def last_head = rounds.last&.fetch('head')
 
-    # A round reviews a new commit on the same base, after the previous round's findings are recorded.
-    def check_next!(base:, head:)
-      return if rounds.empty?
-
-      raise Error, "The ledger's rounds measure the change against #{data['base']}; use a new ledger." unless
-        data['base'] == base
-
-      check_new_head!(head)
-      return if recorded?(rounds.last)
-
-      raise Error, "Record round #{rounds.size}'s findings with `shaka review record` before the next round."
+    # Peers may join the current head; advancing waits for every completion and disposition.
+    def check_next!(base:, head:, reviewer:, own: nil)
+      check_base!(base)
+      check_duplicate!(head, reviewer, own)
+      check_batch!(head)
+      check_dispositions!(head)
     end
 
     # The newest disposition of every finding so far, keyed by the id rounds share.
-    def prior_findings
-      rounds.each_with_index.with_object({}) do |(round, index), latest|
+    def prior_finding_lines(head)
+      latest = previous_rounds(head).each_with_index.with_object({}) do |(round, index), findings|
         LocalReviewFinding.list(round['findings'], "round #{index + 1} finding").each do |finding|
-          latest[finding.id] = finding
+          findings[[round.fetch('reviewer').downcase, finding.id]] = finding
         end
-      end.values
-    end
-
-    def append!(base:, round:)
-      write(data.merge('base' => base, 'rounds' => rounds + [round]))
-    end
-
-    # Sets the last round's findings and any usage the host reported for it.
-    def record!(content)
-      raise Error, 'Record content must be an object.' unless content.is_a?(Hash)
-
-      round = last_round.merge(content.slice('findings', 'model', 'tokens', 'cost', 'estimate'))
-      check_findings!(round, rounds.size)
-      write(data.merge(content.slice('fallback'), 'rounds' => rounds[0...-1] + [round]))
+      end
+      latest.map { |(reviewer, _id), finding| "#{finding.prompt_line} [reviewer #{reviewer}]" }
     end
 
     private
@@ -77,12 +71,7 @@ module Shaka
                 end
     end
 
-    def last_round = rounds.last || raise(Error, 'The ledger has no round to record.')
-
-    def check_new_head!(head)
-      reviewed = rounds.index { |round| round['head'] == head }
-      raise Error, "Round #{reviewed + 1} already reviewed #{head}; commit the fix first." if reviewed
-    end
+    def same_reviewer?(round, reviewer) = round.fetch('reviewer').downcase == reviewer.downcase
 
     def recorded?(round) = round.key?('findings') || reported_count(round).zero?
 
@@ -100,13 +89,6 @@ module Shaka
       raise Error, "Round report #{round['report']} has no FINDINGS count." unless match
 
       match[2].to_i
-    end
-
-    def write(content)
-      temporary = "#{@path}.#{Process.pid}.tmp"
-      File.write(temporary, "#{JSON.pretty_generate(content)}\n", perm: 0o600)
-      File.rename(temporary, @path)
-      @data = content
     end
   end
 end
